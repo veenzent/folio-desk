@@ -1,0 +1,1589 @@
+openapi: 3.0.3
+info:
+  title: FolioDesk API
+  version: 0.1.0
+  description: |
+    FolioDesk lets a freelance developer manage the client systems he maintains.
+    Clients log in to raise change requests on their own projects. The admin (the freelancer)
+    sees one ranked queue of work and publishes selected projects as a public portfolio.
+
+    **Roles:** Public (no token), Client, Admin.
+
+    **Conventions**
+    - All routes sit under `/api/v1`. Ids are UUIDs. Timestamps are ISO 8601 in UTC.
+    - A client who asks for another client's resource gets **404**, not 403, so its existence is not revealed.
+      403 is used when the role itself may not call the endpoint.
+    - Validation errors return **400** (not FastAPI's default 422).
+    - Every error uses the same shape: `{ "error": { "code", "message", "details" } }`.
+    - Login and register are limited to 10 calls per minute per IP (429).
+
+    **Order of checks:** rate limit (429), authenticate (401), role (403), validate input (400),
+    load resource scoped to the caller's client (404), business rules (409), perform the change.
+servers:
+  - url: http://localhost:8000/api/v1
+    description: Local development
+  # - url: https://foliodesk.onrender.com/api/v1
+  #   description: Production development
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Auth
+  - name: Invites
+  - name: Clients
+  - name: Projects
+  - name: Requests
+  - name: Comments
+  - name: Dashboard
+  - name: Portfolio
+  - name: Health
+
+paths:
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a client user with an invite code (E1)
+      description: Consumes the invite code and links it to the new user in one transaction. No token is returned; the client logs in next.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            example:
+              invite_code: k3Zp9QxT2mWa
+              email: ngozi@zenithfoods.example
+              password: Str0ngPassw0rd
+      responses:
+        '201':
+          description: Account created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: Validation error, or invalid_invite (code unknown, expired, used or revoked; one generic message)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in with email and password (E2)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              email: ngozi@zenithfoods.example
+              password: Str0ngPassw0rd
+      responses:
+        '200':
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: invalid_credentials (same message whether the email or the password is wrong)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: account_disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Current user (E3)
+      responses:
+        '200':
+          description: The logged-in user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /invites:
+    post:
+      tags: [Invites]
+      summary: Create an invite code for a client (E4)
+      description: Admin only. The plain code is shown once; only its hash is stored.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InviteCreate'
+      responses:
+        '201':
+          description: Invite created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InviteCreated'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    get:
+      tags: [Invites]
+      summary: List invite codes (E5)
+      description: Admin only. The code itself is never returned.
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/InviteStatus'
+        - name: client_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Paginated invites
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PagedInvites'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /invites/{id}:
+    delete:
+      tags: [Invites]
+      summary: Revoke an invite code (E6)
+      description: Sets revoked_at. Revoking an already revoked code is accepted and returns 204.
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '204':
+          description: Revoked
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: invite_already_used
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /clients:
+    post:
+      tags: [Clients]
+      summary: Create a client (E7)
+      description: Admin only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClientCreate'
+            example:
+              name: Zenith Foods Ltd
+              contact_email: ops@zenithfoods.example
+              tier: retainer
+      responses:
+        '201':
+          description: Client created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Client'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    get:
+      tags: [Clients]
+      summary: List clients (E8)
+      description: Admin only.
+      parameters:
+        - name: tier
+          in: query
+          schema:
+            $ref: '#/components/schemas/ClientTier'
+        - name: q
+          in: query
+          description: Name contains
+          schema:
+            type: string
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [name, -created_at]
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Paginated clients
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PagedClients'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /clients/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      tags: [Clients]
+      summary: Get a client (E9)
+      description: Admin only.
+      responses:
+        '200':
+          description: The client
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Client'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Clients]
+      summary: Update a client (E10)
+      description: Admin only. Partial update; an empty body returns 400.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClientUpdate'
+      responses:
+        '200':
+          description: Updated client
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Client'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Clients]
+      summary: Delete a client (E11)
+      description: Admin only. Blocked while projects, users or invite codes exist. Archive the projects and deactivate the users instead.
+      responses:
+        '204':
+          description: Deleted
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: client_has_dependents
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /projects:
+    post:
+      tags: [Projects]
+      summary: Create a project (E12)
+      description: Admin only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectCreate'
+            example:
+              client_id: 3f0c9e5a-7a4e-4d0e-9a53-1c2c0f6b2a10
+              name: Zenith Inventory Portal
+              description: Stock and delivery tracking for Zenith warehouses
+              stack: FastAPI, PostgreSQL, React
+              live_url: https://inventory.zenithfoods.example
+              status: maintenance
+              is_public: true
+              public_summary: Inventory and delivery tracking portal for a food distributor.
+      responses:
+        '201':
+          description: Project created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: project_name_taken (same name within the same client)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      tags: [Projects]
+      summary: List projects (E13)
+      description: Admin sees all projects. A client sees only their own client's projects. The client_id and is_public filters are admin only (400 for a client).
+      parameters:
+        - name: client_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/ProjectStatus'
+        - name: is_public
+          in: query
+          schema:
+            type: boolean
+        - name: q
+          in: query
+          description: Name contains
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Paginated projects
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PagedProjects'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /projects/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      tags: [Projects]
+      summary: Get a project (E14)
+      description: Admin can read any project. A client gets 404 for a project that belongs to another client.
+      responses:
+        '200':
+          description: The project
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Projects]
+      summary: Update a project (E15)
+      description: Admin only. client_id cannot be changed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectUpdate'
+      responses:
+        '200':
+          description: Updated project
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    delete:
+      tags: [Projects]
+      summary: Delete a project (E16)
+      description: Admin only. Blocked while requests exist (project_has_requests). Set status to archived instead.
+      responses:
+        '204':
+          description: Deleted
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /projects/{project_id}/requests:
+    parameters:
+      - $ref: '#/components/parameters/ProjectIdPath'
+    post:
+      tags: [Requests]
+      summary: Create a request on a project (E17)
+      description: A client can create requests only on their own projects. Admin can create on a client's behalf. created_by is taken from the token and status starts as new.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RequestCreate'
+            example:
+              title: Login page times out
+              description: Users are logged out after about two minutes of inactivity on the inventory portal.
+              type: bug
+      responses:
+        '201':
+          description: Request created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Request'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: project_archived
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      tags: [Requests]
+      summary: List requests on a project (E18)
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/RequestStatus'
+        - name: type
+          in: query
+          schema:
+            $ref: '#/components/schemas/RequestType'
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [created_at, -created_at]
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Paginated requests (client view for a Client)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PagedRequests'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /requests:
+    get:
+      tags: [Requests]
+      summary: List requests (E19)
+      description: |
+        Admin sees all requests and can filter by client_id, project_id, status, type and pinned.
+        Default sort for admin is `priority`. Requests in a closed status have a null score and sort last.
+
+        A Client sees only requests on their own client's projects, can filter by project_id, status and type,
+        and defaults to `-created_at`. Other filters return 400 for a Client.
+      parameters:
+        - name: client_id
+          in: query
+          description: Admin only
+          schema:
+            type: string
+            format: uuid
+        - name: project_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/RequestStatus'
+        - name: type
+          in: query
+          schema:
+            $ref: '#/components/schemas/RequestType'
+        - name: pinned
+          in: query
+          description: Admin only
+          schema:
+            type: boolean
+        - name: sort
+          in: query
+          description: priority is admin only
+          schema:
+            type: string
+            enum: [priority, created_at, -created_at]
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Paginated requests
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PagedRequests'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /requests/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      tags: [Requests]
+      summary: Get a request (E20)
+      description: |
+        Client view: id, project_id, created_by, title, description, type, status, rejection_reason, created_at, closed_at.
+        Admin view adds effort_hours, pinned, priority_score and priority_breakdown.
+        These internal fields are never shown to a Client.
+      responses:
+        '200':
+          description: The request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Request'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Requests]
+      summary: Update a request (E21)
+      description: |
+        **Client:** own request, only while status is `new`. May change title, description or type, or set status to `cancelled`.
+        Any other field returns 403 `field_not_allowed`. A request that is no longer new returns 409 `request_locked`.
+
+        **Admin:** may change title, description, type, status, effort_hours, pinned and rejection_reason.
+        A status change must follow the transition table. Setting status to `rejected` requires rejection_reason (400 if missing).
+
+        Allowed status transitions: new to triaged, in_progress, rejected, cancelled; triaged to in_progress, rejected;
+        in_progress to awaiting_client, done; awaiting_client to in_progress. Anything else returns 409 `invalid_transition`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RequestUpdate'
+            examples:
+              adminTriage:
+                summary: Admin triages and estimates
+                value:
+                  status: triaged
+                  effort_hours: 3
+                  pinned: false
+              clientCancel:
+                summary: Client cancels a new request
+                value:
+                  status: cancelled
+      responses:
+        '200':
+          description: Updated request for the caller's role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Request'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: field_not_allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: invalid_transition or request_locked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags: [Requests]
+      summary: Delete a request (E22)
+      description: Admin only. Allowed only while status is new, rejected or cancelled. Comments are deleted with it.
+      responses:
+        '204':
+          description: Deleted
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: request_not_deletable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /requests/{id}/comments:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      tags: [Comments]
+      summary: Comment on a request (E23)
+      description: A client comment on a request in awaiting_client moves it to in_progress automatically.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommentCreate'
+      responses:
+        '201':
+          description: Comment created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    get:
+      tags: [Comments]
+      summary: List comments on a request (E24)
+      description: Oldest first.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Paginated comments
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PagedComments'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /dashboard/summary:
+    get:
+      tags: [Dashboard]
+      summary: Summary of open requests (E25)
+      description: Admin only. Open means new, triaged, in_progress or awaiting_client.
+      responses:
+        '200':
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /dashboard/queue:
+    get:
+      tags: [Dashboard]
+      summary: Ranked queue of open requests (E26)
+      description: Admin only. Ordered by priority score, highest first. Ties are broken by oldest request first.
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 10
+      responses:
+        '200':
+          description: The ranked queue
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/QueueItem'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /portfolio:
+    get:
+      tags: [Portfolio]
+      summary: Public portfolio (E27)
+      description: No token needed. Only projects with is_public true and a status other than archived appear. No client information is ever included.
+      security: []
+      parameters:
+        - name: q
+          in: query
+          description: Name contains
+          schema:
+            type: string
+        - name: stack
+          in: query
+          description: Stack contains
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Paginated public projects
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PagedPortfolio'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /portfolio/{id}:
+    get:
+      tags: [Portfolio]
+      summary: One public project (E28)
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: The public project
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortfolioItem'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          description: project_not_found (missing, not public, or archived)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check (E29)
+      security: []
+      responses:
+        '200':
+          description: Service and database are up
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          description: The database cannot be reached
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Token from POST /auth/login. Claims are sub (user id), role, client_id and exp.
+
+  parameters:
+    IdPath:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ProjectIdPath:
+      name: project_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSize:
+      name: page_size
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  responses:
+    BadRequest:
+      description: validation_error (bad body, query or id)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: validation_error
+              message: Request validation failed
+              details:
+                - field: title
+                  issue: must be between 1 and 200 characters
+    Unauthorized:
+      description: Missing, invalid or expired token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: not_authenticated
+              message: Authentication required
+    Forbidden:
+      description: The role is not allowed to call this endpoint
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: forbidden
+              message: You do not have permission to perform this action
+    NotFound:
+      description: Resource missing, or not owned by the calling client
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: not_found
+              message: Resource not found
+    Conflict:
+      description: Duplicate value, blocked delete, invalid transition or locked request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: conflict
+              message: The request conflicts with the current state of the resource
+    TooManyRequests:
+      description: Rate limit hit (10 calls per minute per IP)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Machine readable code
+            message:
+              type: string
+              description: Human readable message
+            details:
+              type: array
+              description: Present for validation failures
+              items:
+                type: object
+                properties:
+                  field:
+                    type: string
+                  issue:
+                    type: string
+
+    UserRole:
+      type: string
+      enum: [admin, client]
+    ClientTier:
+      type: string
+      enum: [standard, retainer, premium]
+    ProjectStatus:
+      type: string
+      enum: [active, maintenance, paused, archived]
+    RequestType:
+      type: string
+      enum: [bug, update, feature]
+    RequestStatus:
+      type: string
+      enum: [new, triaged, in_progress, awaiting_client, done, rejected, cancelled]
+    InviteStatus:
+      type: string
+      enum: [active, used, expired, revoked]
+
+    RegisterRequest:
+      type: object
+      required: [invite_code, email, password]
+      additionalProperties: false
+      properties:
+        invite_code:
+          type: string
+        email:
+          type: string
+          format: email
+          maxLength: 255
+        password:
+          type: string
+          minLength: 10
+          maxLength: 128
+          description: At least one letter and one digit
+    LoginRequest:
+      type: object
+      required: [email, password]
+      additionalProperties: false
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+    TokenResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          example: bearer
+        expires_in:
+          type: integer
+          description: Seconds until the token expires
+          example: 3600
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        role:
+          $ref: '#/components/schemas/UserRole'
+        client_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Null for the admin
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    InviteCreate:
+      type: object
+      required: [client_id]
+      additionalProperties: false
+      properties:
+        client_id:
+          type: string
+          format: uuid
+        expires_in_days:
+          type: integer
+          minimum: 1
+          maximum: 30
+          default: 7
+    InviteCreated:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        client_id:
+          type: string
+          format: uuid
+        code:
+          type: string
+          description: 12-character random URL-safe string, shown once only
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+    Invite:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        client_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/InviteStatus'
+        expires_at:
+          type: string
+          format: date-time
+        used_at:
+          type: string
+          format: date-time
+          nullable: true
+        used_by:
+          type: string
+          format: uuid
+          nullable: true
+        revoked_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    ClientCreate:
+      type: object
+      required: [name, contact_email]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 150
+        contact_email:
+          type: string
+          format: email
+        tier:
+          $ref: '#/components/schemas/ClientTier'
+    ClientUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 150
+        contact_email:
+          type: string
+          format: email
+        tier:
+          $ref: '#/components/schemas/ClientTier'
+    Client:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        contact_email:
+          type: string
+          format: email
+        tier:
+          $ref: '#/components/schemas/ClientTier'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ProjectCreate:
+      type: object
+      required: [client_id, name]
+      additionalProperties: false
+      properties:
+        client_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 150
+        description:
+          type: string
+        stack:
+          type: string
+          maxLength: 255
+        live_url:
+          type: string
+          format: uri
+          maxLength: 500
+        status:
+          $ref: '#/components/schemas/ProjectStatus'
+        is_public:
+          type: boolean
+          default: false
+        public_summary:
+          type: string
+          maxLength: 1000
+          description: Required when is_public is true
+    ProjectUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 150
+        description:
+          type: string
+        stack:
+          type: string
+          maxLength: 255
+        live_url:
+          type: string
+          format: uri
+          maxLength: 500
+        status:
+          $ref: '#/components/schemas/ProjectStatus'
+        is_public:
+          type: boolean
+        public_summary:
+          type: string
+          maxLength: 1000
+    Project:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        client_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        stack:
+          type: string
+          nullable: true
+        live_url:
+          type: string
+          nullable: true
+        status:
+          $ref: '#/components/schemas/ProjectStatus'
+        is_public:
+          type: boolean
+        public_summary:
+          type: string
+          nullable: true
+        open_request_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    RequestCreate:
+      type: object
+      required: [title, description, type]
+      additionalProperties: false
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          minLength: 1
+          maxLength: 5000
+        type:
+          $ref: '#/components/schemas/RequestType'
+    RequestUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: Which fields are allowed depends on the caller's role. See the PATCH /requests/{id} description.
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          minLength: 1
+          maxLength: 5000
+        type:
+          $ref: '#/components/schemas/RequestType'
+        status:
+          $ref: '#/components/schemas/RequestStatus'
+        effort_hours:
+          type: number
+          exclusiveMinimum: true
+          minimum: 0
+          maximum: 999
+          nullable: true
+          description: Admin only. Null clears the estimate.
+        pinned:
+          type: boolean
+          description: Admin only
+        rejection_reason:
+          type: string
+          description: Admin only. Required when status is rejected.
+    PriorityBreakdown:
+      type: object
+      description: Admin only
+      properties:
+        type_points:
+          type: integer
+        tier_points:
+          type: integer
+        waiting_points:
+          type: integer
+        effort_points:
+          type: integer
+        pinned_points:
+          type: integer
+    Request:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        created_by:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type: string
+        type:
+          $ref: '#/components/schemas/RequestType'
+        status:
+          $ref: '#/components/schemas/RequestStatus'
+        rejection_reason:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        closed_at:
+          type: string
+          format: date-time
+          nullable: true
+        effort_hours:
+          type: number
+          nullable: true
+          description: Admin view only
+        pinned:
+          type: boolean
+          description: Admin view only
+        priority_score:
+          type: integer
+          nullable: true
+          description: Admin view only. Null for closed requests.
+        priority_breakdown:
+          $ref: '#/components/schemas/PriorityBreakdown'
+
+    CommentCreate:
+      type: object
+      required: [body]
+      additionalProperties: false
+      properties:
+        body:
+          type: string
+          minLength: 1
+          maxLength: 2000
+    Comment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        request_id:
+          type: string
+          format: uuid
+        author_id:
+          type: string
+          format: uuid
+        author_role:
+          $ref: '#/components/schemas/UserRole'
+        body:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    DashboardSummary:
+      type: object
+      properties:
+        open_total:
+          type: integer
+        by_status:
+          type: object
+          additionalProperties:
+            type: integer
+          description: A count for every status
+        by_type:
+          type: object
+          additionalProperties:
+            type: integer
+        by_project:
+          type: array
+          items:
+            type: object
+            properties:
+              project_id:
+                type: string
+                format: uuid
+              project_name:
+                type: string
+              client_name:
+                type: string
+              open_count:
+                type: integer
+        by_client:
+          type: array
+          items:
+            type: object
+            properties:
+              client_id:
+                type: string
+                format: uuid
+              client_name:
+                type: string
+              open_count:
+                type: integer
+        oldest_open_days:
+          type: integer
+    QueueItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        type:
+          $ref: '#/components/schemas/RequestType'
+        status:
+          $ref: '#/components/schemas/RequestStatus'
+        project_id:
+          type: string
+          format: uuid
+        project_name:
+          type: string
+        client_id:
+          type: string
+          format: uuid
+        client_name:
+          type: string
+        effort_hours:
+          type: number
+          nullable: true
+        pinned:
+          type: boolean
+        days_waiting:
+          type: integer
+        priority_score:
+          type: integer
+        priority_breakdown:
+          $ref: '#/components/schemas/PriorityBreakdown'
+
+    PortfolioItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        public_summary:
+          type: string
+        stack:
+          type: string
+          nullable: true
+        live_url:
+          type: string
+          nullable: true
+    Health:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        database:
+          type: string
+          example: up
+
+    PagedInvites:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Invite'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+    PagedClients:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Client'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+    PagedProjects:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Project'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+    PagedRequests:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Request'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+    PagedComments:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Comment'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+    PagedPortfolio:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PortfolioItem'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
