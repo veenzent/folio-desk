@@ -5,10 +5,12 @@ from pydantic import BaseModel
 
 class UserInternalResponse(BaseModel):
     id: UUID
-    email_address: str | None
-    phone_number: str | None
+    client_id: str
+    email: str | None
     password_hash: str
+    role: str
     is_active: bool
+    created_at: str
     # all other fields needed ...
 
     class Config:

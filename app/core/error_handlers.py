@@ -10,7 +10,7 @@ from app.core.exceptions import CustomHTTPException
 
 
 def register_error_handlers(app):
-    logger = logging.getLogger("carbnb.error_handlers")
+    logger = logging.getLogger("foliodesk.error_handlers")
 
     @app.exception_handler(CustomHTTPException)
     async def custom_http_exception_handler(request: Request, exc: CustomHTTPException):

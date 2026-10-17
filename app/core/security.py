@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.db.session import get_async_db
 from app.models.users import Users
+from app.models.clients import Clients
+from app.schemas.client_schemas import AddClientResponse
 from app.schemas.users import TokenData, UserExternalResponse, UserInternalResponse
 
 settings = get_settings()
@@ -88,7 +90,7 @@ async def get_user(
         UserInternalResponse | None: The user object if found, otherwise None.
     """
     result = await db.execute(
-        select(Users).where(Users.email_address == email_address)
+        select(Users).where(Users.email == email_address)
     )
     user_obj = result.scalar_one_or_none()
     if not user_obj:
@@ -96,10 +98,43 @@ async def get_user(
 
     return UserInternalResponse(
         id=getattr(user_obj, "id", None),
-        email_address=getattr(user_obj, "email_address", ""),
-        phone_number=getattr(user_obj, "phone_number", ""),
+        client_id=getattr(user_obj, "client_id", ""),
+        email=getattr(user_obj, "email", ""),
         password_hash=getattr(user_obj, "password_hash", ""),
+        role=getattr(user_obj, "role", ""),
         is_active=getattr(user_obj, "is_active", False),
+        created_at=getattr(user_obj, "created_at", ""),
+    )
+
+
+async def get_client(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    email_address: EmailStr
+) -> AddClientResponse | None:
+    """
+    Retrieve a client object from the database by email address.
+
+    Args:
+        db (Annotated[AsyncSession, Depends(get_db)]): The async database session.
+        email_address (EmailStr): The email address of the client to retrieve.
+
+    Returns:
+        UserInternalResponse | None: The client object if found, otherwise None.
+    """
+    result = await db.execute(
+        select(Clients).where(Clients.contact_email == email_address)
+    )
+    client_obj = result.scalar_one_or_none()
+    if not client_obj:
+        return None
+
+    return AddClientResponse(
+        id=getattr(client_obj, "id", None),
+        name=getattr(client_obj, "name", ""),
+        contact_email=getattr(client_obj, "contact_email", ""),
+        tier=getattr(client_obj, "tier", ""),
+        created_at=getattr(client_obj, "created_at", ""),
+        updated_at=getattr(client_obj, "updated_at", ""),
     )
 
 

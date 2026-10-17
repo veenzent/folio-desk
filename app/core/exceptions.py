@@ -99,3 +99,12 @@ class TokenExpiredException(CustomHTTPException):
             error_code="TOKEN_EXPIRED",
             message="Token has expired",
         )
+
+
+class InvalidRoleException(CustomHTTPException):
+    def __init__(self):
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            error_code="INVALID_ROLE",
+            message="You do not have permission to perform this action",
+        )

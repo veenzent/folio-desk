@@ -10,7 +10,7 @@ router = APIRouter(prefix="/clients")
 
 
 @router.post(
-    "/clients",
+    "",
     summary="Create a client",
     dependencies=[Depends(RateLimit(times=10, seconds=60))],
     response_model=AddClientResponse,
