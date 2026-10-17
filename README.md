@@ -179,7 +179,7 @@ pytest
 
 ## License
 
-This project does not currently declare a formal license in the repository. If you intend to distribute or publish it, add a license file and update this section accordingly.
+This project does not currently declare a formal license in the repository.
 
 ## Contributing
 
