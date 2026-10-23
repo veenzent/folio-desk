@@ -39,6 +39,7 @@ async def register_admin(
 
 @router.post(
     "/register",
+    deprecated=True,
     summary="Register a client user with an invite code",
     dependencies=[Depends(RateLimit(times=10, seconds=60))],
     response_model=RegisterRequestResponse,
