@@ -12,7 +12,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.exceptions import InvalidRoleException
 from app.db.session import get_async_db
+from app.models.enums import UserRole
 from app.models.users import Users
 from app.models.clients import Clients
 from app.schemas.client_schemas import AddClientResponse
@@ -21,7 +23,7 @@ from app.schemas.users import TokenData, UserExternalResponse, UserInternalRespo
 settings = get_settings()
 hasher = PasswordHash.recommended()
 # TODO: Add a different hash algorithm for refresh token hashing
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 
 # ----------------------- Password and Refresh Token Hashing ----------------------- #
@@ -98,7 +100,7 @@ async def get_user(
 
     return UserInternalResponse(
         id=getattr(user_obj, "id", None),
-        client_id=getattr(user_obj, "client_id", ""),
+        client_id=getattr(user_obj, "client_id", None),
         email=getattr(user_obj, "email", ""),
         password_hash=getattr(user_obj, "password_hash", ""),
         role=getattr(user_obj, "role", ""),
@@ -160,10 +162,12 @@ async def get_user_by_phone(
 
     return UserInternalResponse(
         id=getattr(user_obj, "id", None),
-        email_address=getattr(user_obj, "email_address", ""),
-        phone_number=getattr(user_obj, "phone_number", ""),
+        client_id=getattr(user_obj, "client_id", ""),
+        email=getattr(user_obj, "email", ""),
         password_hash=getattr(user_obj, "password_hash", ""),
+        role=getattr(user_obj, "role", ""),
         is_active=getattr(user_obj, "is_active", False),
+        created_at=getattr(user_obj, "created_at", ""),
     )
 
 
@@ -187,22 +191,24 @@ async def get_user_by_id(
 
     return UserInternalResponse(
         id=getattr(user_obj, "id", None),
-        email_address=getattr(user_obj, "email_address", ""),
-        phone_number=getattr(user_obj, "phone_number", ""),
+        client_id=getattr(user_obj, "client_id", ""),
+        email=getattr(user_obj, "email", ""),
         password_hash=getattr(user_obj, "password_hash", ""),
+        role=getattr(user_obj, "role", ""),
         is_active=getattr(user_obj, "is_active", False),
+        created_at=getattr(user_obj, "created_at", ""),
     )
 
 
 async def authenticate_user(
-    db: Annotated[AsyncSession, Depends(get_db)], username: str, password: str
+    db: AsyncSession, username: str, password: str
 ) -> UserExternalResponse | Literal[False]:
     user = await get_user(db, username)
     if not user:
         return False
     if not verify_password(password, user.password_hash):
         return False
-    return UserExternalResponse(**user.model_dump())
+    return UserExternalResponse.from_internal(user)
 
 
 # ----------------------- JWT Token Creation and Verification ----------------------- #
@@ -236,6 +242,58 @@ def create_refresh_token(data: dict, expires_delta: timedelta | None = None):
     )
 
     return refresh_token
+
+
+async def get_current_admin(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    token: Annotated[str, Depends(oauth2_scheme)],
+) -> UserInternalResponse:
+    """
+    Retrieves the currently authenticated admin from the provided token.
+
+    Args:
+        request (Request): The incoming request.
+        db (Annotated[AsyncSession, Depends(get_db)]): The async database session.
+        token (Annotated[str, Depends(oauth2_scheme)]): The provided access token.
+
+    Returns:
+        UserInternalResponse: The currently authenticated admin.
+
+    Raises:
+        HTTPException: If the provided token is invalid or cannot be decoded.
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    try:
+        payload: dict = jwt.decode(
+            token, settings.secret_key, algorithms=[settings.algorithm]
+        )
+        email_address = payload.get("sub")
+        if email_address is None:
+            raise credentials_exception
+
+        token_data = TokenData(email_address=email_address)
+    except InvalidTokenError:
+        raise credentials_exception
+
+    # `db` should already be an AsyncSession provided by Depends(get_db)
+    user = await get_user(db, email_address=token_data.email_address)
+    if user is None:
+        raise credentials_exception
+    
+    if user.role != UserRole.admin:
+        raise InvalidRoleException
+
+    # Attach user to request state for downstream access
+    request.state.user = user
+
+    return user
+
 
 
 async def get_current_user(

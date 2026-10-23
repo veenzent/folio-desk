@@ -27,6 +27,24 @@ class EmailAlreadyRegisteredException(CustomHTTPException):
         )
 
 
+class EmailRequiredException(CustomHTTPException):
+    def __init__(self):
+        super().__init__(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            error_code="EMAIL_REQUIRED",
+            message="Email address is required",
+        )
+
+
+class InvalidEmailException(CustomHTTPException):
+    def __init__(self):
+        super().__init__(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            error_code="INCORRECT_EMAIL_ADDRESS",
+            message="Incorrect email address",
+        )
+
+
 class PhoneAlreadyRegisteredException(CustomHTTPException):
     def __init__(self):
         super().__init__(

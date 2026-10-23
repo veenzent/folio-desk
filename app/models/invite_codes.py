@@ -31,8 +31,9 @@ class InviteCodes(Base):
         nullable=False,
     )
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    used_by: Mapped[UUID | None] = mapped_column(
+    used_by_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
+        index=True,
     )
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
@@ -42,6 +43,6 @@ class InviteCodes(Base):
     )
 
     client: Mapped[Clients] = relationship(back_populates="invite_codes")
-    used_by: Mapped[Users | None] = relationship(
+    used_by_user: Mapped[Users | None] = relationship(
         back_populates="invite_codes_used"
     )

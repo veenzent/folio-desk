@@ -13,6 +13,8 @@ from app.core.config import (
 )
 from app.core.exceptions import (
     EmailAlreadyRegisteredException,
+    EmailRequiredException,
+    InvalidEmailException,
     PhoneAlreadyRegisteredException,
     InternalServerErrorException,
     # PasswordMismatchException,
@@ -22,7 +24,8 @@ from app.core.exceptions import (
 )
 from app.core.security import get_user, get_user_by_phone, hasher
 from app.models.users import Users # UserVerificationOTP
-from app.schemas.auth_schemas import RegisterRequest, RegisterRequestResponse
+from app.models.enums import UserRole
+from app.schemas.auth_schemas import AddAdmin, AddAdminResponse, RegisterRequest, RegisterRequestResponse
 # from app.tasks.email_tasks import mask_email, send_verification_email #TODO: Confirm email tasks requirements from Mr Ridwan before working on this.
 
 logger = logging.getLogger(__name__)
@@ -59,7 +62,7 @@ async def create_new_user(user: RegisterRequest, db: AsyncSession) -> RegisterRe
 
     if email_signup_type:
         if await get_user(
-            db, user.identifier.lower()
+            db, user.email.lower()
         ):  # TODO: we would rely on DB's unique constraint at scale for performance 📝
             raise EmailAlreadyRegisteredException()
     else:
@@ -110,6 +113,70 @@ async def create_new_user(user: RegisterRequest, db: AsyncSession) -> RegisterRe
     # )
 
     return RegisterRequestResponse(
+        message="User created successfully"
+    )
+
+
+async def add_admin_user(user: AddAdmin, role: UserRole, db: AsyncSession) -> AddAdminResponse:
+    """
+    Creates a new admin based on the provided admin data
+
+    Args:
+        user (AddAdmin): The admin signup request data
+        role (UserRole): The role of the user
+        db (AsyncSession): The async database session
+
+    Raises:
+        EmailAlreadyRegisteredException: If the email address is already
+            registered
+        PasswordMismatchException: If the password and confirm password do not
+            match. Note: confirm password field would be available in future updates TODO: confirm password field.
+        PasswordRequirementsNotMetException: If the password does not meet the
+            requirements
+
+    Returns:
+        AddAdminResponse: The newly created admin data
+    """
+    if not (password_check := validate_password(user.password))["is_valid"]:
+        raise PasswordRequirementsNotMetException(details=password_check["results"])
+
+    if user.email is None:
+        raise EmailRequiredException()
+    
+    if "@" not in user.email.lower():
+        raise InvalidEmailException()
+
+    if await get_user(
+        db, user.email.lower()
+    ):  # TODO: we would rely on DB's unique constraint at scale for performance 📝
+        raise EmailAlreadyRegisteredException()
+
+    try:
+        new_user = Users(
+            id=uuid7(),
+            # client_id=uuid7(),
+            email=user.email,
+            password_hash=hasher.hash(user.password),
+            role=role,
+            # is_active=...,
+            # created_at=...
+        )
+
+        db.add(new_user)
+        # db.add_all([new_user, new_otp])
+        await db.commit()
+        await db.refresh(new_user)
+
+    except IntegrityError:
+        await db.rollback()
+        raise UserAlreadyRegisteredException()
+    except Exception:
+        await db.rollback()
+        logger.exception("[ADMIN USER SIGNUP]: Failed to create new admin user")
+        raise InternalServerErrorException()
+
+    return AddAdminResponse(
+        email=user.email,
         message="User created successfully"
     )
 

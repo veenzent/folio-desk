@@ -10,12 +10,31 @@ from app.core.security import (
     create_access_token,
     get_db,
     settings,
-    get_current_user,
+    get_current_user as get_current_auth_user,
 )
-from app.schemas.auth_schemas import RegisterRequest, RegisterRequestResponse, Token
-from app.services.auth_services import create_new_user
+from app.models.enums import UserRole
+from app.schemas.auth_schemas import AddAdmin, AddAdminResponse, RegisterRequest, RegisterRequestResponse, Token
+from app.services.auth_services import add_admin_user, create_new_user
 
 router = APIRouter(prefix="/auth")
+
+
+@router.post(
+    "/register-admin",
+    deprecated=True,
+    summary="Register an admin user",
+    dependencies=[Depends(RateLimit(times=10, seconds=60))],
+    response_model=AddAdminResponse,
+)
+async def register_admin(
+    admin_user: AddAdmin, role: UserRole, db: AsyncSession = Depends(get_db)
+) -> AddAdminResponse:
+    """
+    Register an admin user
+    """
+    new_user: AddAdminResponse = await add_admin_user(admin_user, role, db)
+
+    return new_user
 
 
 @router.post(
@@ -30,7 +49,7 @@ async def register_user(
     """
     Consumes the invite code and links it to the new user in one transaction. No token is returned; the client logs in next.
     """
-    new_user: RegisterRequestResponse = await create_new_user()
+    new_user: RegisterRequestResponse = await create_new_user(client_user, db)
 
     return new_user
 
@@ -67,18 +86,9 @@ async def login_user(
 @router.get("/me", summary="Get current user")
 async def get_current_user(
     db: AsyncSession = Depends(get_db),
-    token: str = Depends(get_current_user),
+    token: str = Depends(get_current_auth_user),
 ):
     """
     Get the current logged-in user based on the provided token.
     """
-    user = await authenticate_user(db, token=token)
-    
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    return user
+    return token

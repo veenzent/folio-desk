@@ -1,6 +1,23 @@
 from datetime import datetime
 from pydantic import BaseModel
 
+from app.models.enums import UserRole
+
+
+class AddAdmin(BaseModel):
+    email: str
+    password: str
+
+
+class AddAdminRole(BaseModel):
+    email: str
+    password: str
+    role: UserRole
+
+class AddAdminResponse(BaseModel):
+    email: str
+    message: str
+
 
 class RegisterRequest(BaseModel):
     invite_code: str
