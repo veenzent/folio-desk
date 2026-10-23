@@ -7,7 +7,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_limiter import FastAPILimiter
 
-from app.api.v1 import auth, client
+from app.api.v1 import auth, client, invites
 from app.core.config import get_settings
 from app.core.error_handlers import register_error_handlers
 from app.core.rate_limit import RateLimit
@@ -125,6 +125,7 @@ register_error_handlers(app)
 # app.include_router(auth.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1", tags=["Auth"])
 app.include_router(client.router, prefix="/api/v1", tags=["Client"])
+app.include_router(invites.router, prefix="/api/v1", tags=["Invites"])
 
 # health check
 @app.get(

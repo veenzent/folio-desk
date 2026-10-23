@@ -16,3 +16,12 @@ class AddClientResponse(BaseModel):
     tier: ClientTier
     created_at: datetime
     updated_at: datetime
+
+
+class ClientsResponse(BaseModel):
+    id: UUID | None = None
+    name: str
+    contact_email: str
+    tier: ClientTier
+    created_at: datetime
+    updated_at: datetime

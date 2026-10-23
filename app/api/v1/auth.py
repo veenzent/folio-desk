@@ -21,7 +21,7 @@ router = APIRouter(prefix="/auth")
 
 @router.post(
     "/register-admin",
-    deprecated=True,
+    # deprecated=True,
     summary="Register an admin user",
     dependencies=[Depends(RateLimit(times=10, seconds=60))],
     response_model=AddAdminResponse,

@@ -109,35 +109,35 @@ async def get_user(
     )
 
 
-async def get_client(
-    db: Annotated[AsyncSession, Depends(get_db)],
-    email_address: EmailStr
-) -> AddClientResponse | None:
-    """
-    Retrieve a client object from the database by email address.
+# async def get_client(
+#     db: Annotated[AsyncSession, Depends(get_db)],
+#     email_address: EmailStr
+# ) -> AddClientResponse | None:
+#     """
+#     Retrieve a client object from the database by email address.
 
-    Args:
-        db (Annotated[AsyncSession, Depends(get_db)]): The async database session.
-        email_address (EmailStr): The email address of the client to retrieve.
+#     Args:
+#         db (Annotated[AsyncSession, Depends(get_db)]): The async database session.
+#         email_address (EmailStr): The email address of the client to retrieve.
 
-    Returns:
-        UserInternalResponse | None: The client object if found, otherwise None.
-    """
-    result = await db.execute(
-        select(Clients).where(Clients.contact_email == email_address)
-    )
-    client_obj = result.scalar_one_or_none()
-    if not client_obj:
-        return None
+#     Returns:
+#         UserInternalResponse | None: The client object if found, otherwise None.
+#     """
+#     result = await db.execute(
+#         select(Clients).where(Clients.contact_email == email_address)
+#     )
+#     client_obj = result.scalar_one_or_none()
+#     if not client_obj:
+#         return None
 
-    return AddClientResponse(
-        id=getattr(client_obj, "id", None),
-        name=getattr(client_obj, "name", ""),
-        contact_email=getattr(client_obj, "contact_email", ""),
-        tier=getattr(client_obj, "tier", ""),
-        created_at=getattr(client_obj, "created_at", ""),
-        updated_at=getattr(client_obj, "updated_at", ""),
-    )
+#     return AddClientResponse(
+#         id=getattr(client_obj, "id", None),
+#         name=getattr(client_obj, "name", ""),
+#         contact_email=getattr(client_obj, "contact_email", ""),
+#         tier=getattr(client_obj, "tier", ""),
+#         created_at=getattr(client_obj, "created_at", ""),
+#         updated_at=getattr(client_obj, "updated_at", ""),
+#     )
 
 
 async def get_user_by_phone(
