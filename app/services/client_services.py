@@ -12,7 +12,7 @@ from app.core.exceptions import EmailAlreadyRegisteredException
 from app.core.security import get_db
 from app.models.clients import Clients
 from app.models.enums import ClientTier
-from app.schemas.client_schemas import AddClient, AddClientResponse, ClientsResponse
+from app.schemas.client_schemas import AddClient, AddClientResponse, ClientsResponse, UpdateClient
 
 
 async def create_new_client(client: AddClient, tier: ClientTier, db: AsyncSession) -> AddClientResponse:
@@ -58,6 +58,59 @@ async def create_new_client(client: AddClient, tier: ClientTier, db: AsyncSessio
     )
 
 
+async def update_client_data(
+        id: str,
+        tier: ClientTier | None,
+        client: UpdateClient | None,
+        db: Annotated[AsyncSession, Depends(get_db)]) -> AddClientResponse:
+    """
+    Update the client data in the database.
+
+    Args:
+        id (str): The ID of the client to update.
+        tier (ClientTier | None): The tier of the client.
+        client (UpdateClient | None): The client data to update.
+        db (Annotated[AsyncSession, Depends(get_db)]): The async database session.
+
+    Returns:
+        AddClientResponse: The updated client data.
+    """
+    result = await db.execute(
+        select(Clients).where(Clients.id == id)
+    )
+    existing_client = result.scalar_one_or_none()
+
+    if not existing_client:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Client with ID {id} not found.",
+        )
+
+    if tier:
+        existing_client.tier = tier
+
+    if client:
+        existing_client.name = client.name if client.name else existing_client.name
+        existing_client.contact_email = client.contact_email if client.contact_email else existing_client.contact_email
+
+    # Update the updated_at timestamp
+    existing_client.updated_at = datetime.now()
+
+    # Update the existing client in the database
+    await db.commit()
+    await db.refresh(existing_client)
+
+    # return existing_client
+    return ClientsResponse(
+        id=getattr(existing_client, "id", None),
+        name=getattr(existing_client, "name", ""),
+        contact_email=getattr(existing_client, "contact_email", ""),
+        tier=getattr(existing_client, "tier", ""),
+        created_at=getattr(existing_client, "created_at", ""),
+        updated_at=getattr(existing_client, "updated_at", ""),
+    )
+
+
 async def get_client(
     db: Annotated[AsyncSession, Depends(get_db)],
     email_address: EmailStr
@@ -92,7 +145,7 @@ async def get_client(
 async def get_client_by_id(
     db: Annotated[AsyncSession, Depends(get_db)],
     id: str
-) -> AddClientResponse | None:
+) -> ClientsResponse | None:
     """
     Retrieve a client object from the database by ID.
 
@@ -101,7 +154,7 @@ async def get_client_by_id(
         id (str): The ID of the client to retrieve.
 
     Returns:
-        AddClientResponse | None: The client object if found, otherwise None.
+        ClientsResponse | None: The client object if found, otherwise None.
     """
     result = await db.execute(
         select(Clients).where(Clients.id == id)
@@ -110,7 +163,7 @@ async def get_client_by_id(
     if not client_obj:
         return None
 
-    return AddClientResponse(
+    return ClientsResponse(
         id=getattr(client_obj, "id", None),
         name=getattr(client_obj, "name", ""),
         contact_email=getattr(client_obj, "contact_email", ""),

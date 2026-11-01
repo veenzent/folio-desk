@@ -3,9 +3,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rate_limit import RateLimit
 from app.core.security import get_db, get_current_admin
-from app.schemas.client_schemas import AddClient, AddClientResponse, ClientsResponse
+from app.schemas.client_schemas import AddClient, AddClientResponse, ClientsResponse, UpdateClient
 from app.models.clients import ClientTier
-from app.services.client_services import create_new_client, get_all_clients, delete_client
+from app.services.client_services import (
+    create_new_client,
+    get_client_by_id as get_client,
+    get_all_clients,
+    delete_client,
+    update_client_data
+)
+
 
 router = APIRouter(prefix="/clients")
 
@@ -51,7 +58,6 @@ async def get_clients(
 
 @router.get(
     "/{id}",
-    deprecated=True,
     summary="Get a client by ID",
     dependencies=[Depends(RateLimit(times=10, seconds=60)), Depends(get_current_admin)],
     response_model=ClientsResponse,
@@ -60,8 +66,7 @@ async def get_client_by_id(id: str, db: AsyncSession = Depends(get_db)) -> Clien
     """
     Admin only route to get a client by ID.
     """
-    clients: list[ClientsResponse] = await get_all_clients(db, skip=0, limit=1000)
-    client = next((client for client in clients if client.id == id), None)
+    client: ClientsResponse | None = await get_client(db, id)
 
     if not client:
         return {"message": f"Client with ID {id} not found."}
@@ -71,29 +76,20 @@ async def get_client_by_id(id: str, db: AsyncSession = Depends(get_db)) -> Clien
 
 @router.patch(
     "/{id}",
-    deprecated=True,
     summary="Update a client",
     dependencies=[Depends(RateLimit(times=10, seconds=60)), Depends(get_current_admin)],
 )
-async def update_client_by_id(id: str, client: AddClient, db: AsyncSession = Depends(get_db)):
+async def update_client_by_id(
+    id: str,
+    tier: ClientTier | None = None,
+    client: UpdateClient | None = None,
+    db: AsyncSession = Depends(get_db)) -> ClientsResponse | dict:
     """
     Admin only route to update a client.
     """
-    clients: list[ClientsResponse] = await get_all_clients(db, skip=0, limit=1000)
-    existing_client = next((c for c in clients if c.id == id), None)
+    updated: ClientsResponse = await update_client_data(id, tier, client, db)
 
-    if not existing_client:
-        return {"message": f"Client with ID {id} not found."}
-
-    # Update the existing client with new data
-    updated_client_data = client.dict(exclude_unset=True)
-    for key, value in updated_client_data.items():
-        setattr(existing_client, key, value)
-
-    # Here you would typically save the updated client back to the database
-    # For example: await save_updated_client(existing_client, db)
-
-    return {"message": f"Client with ID {id} has been updated.", "client": existing_client}
+    return updated
 
 
 @router.delete(

@@ -25,3 +25,8 @@ class ClientsResponse(BaseModel):
     tier: ClientTier
     created_at: datetime
     updated_at: datetime
+
+
+class UpdateClient(BaseModel):
+    name: str | None = None
+    contact_email: str | None = None
