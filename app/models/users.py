@@ -51,9 +51,7 @@ class Users(Base):
     )
 
     client: Mapped[Clients | None] = relationship(back_populates="users")
-    invite_codes_used: Mapped[list[InviteCodes]] = relationship(
-        back_populates="used_by_user"
-    )
+
     requests_created: Mapped[list[Requests]] = relationship(
         back_populates="creator"
     )

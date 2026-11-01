@@ -51,7 +51,7 @@ The intended workflow is:
 - Redis for request rate limiting
 - JWT for authentication
 - Pydantic validation and schema models
-- pytest-ready service structure for auth and security workflows
+- pytest test runner with Python `unittest` cases, FastAPI `TestClient`, and mocked async database sessions
 
 ## Repository structure
 
@@ -70,6 +70,7 @@ The intended workflow is:
 ├── ERD.dbml
 ├── folio-desk-API-Spec.yaml
 ├── one-pager.md
+├── one-pager-wk3.md
 ├── pyproject.toml
 ├── uv.lock
 ├── README.md
@@ -85,7 +86,7 @@ git clone https://github.com/veenzent/folio-desk.git
 cd folio-desk
 ```
 
-### 2. Create a virtual environment and install dependencies
+### 2. Install dependencies
 
 This project uses `uv` for dependency management and is configured in `pyproject.toml`.
 
@@ -93,33 +94,30 @@ This project uses `uv` for dependency management and is configured in `pyproject
 uv sync
 ```
 
-If you prefer a standard Python setup:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -e .
-```
-
 ### 3. Configure environment variables
 
-Create or update a `.env` file in the project root with the required app settings. At a minimum, the app expects values similar to:
+Copy [`.env.sample`](./.env.sample) to `.env` and replace the example values with your local settings. At a minimum, the app expects values similar to:
 
 ```env
 ENVIRONMENT=development
 APP_NAME="Folio Desk"
-SECRET_KEY=your_secret_key
+SECRET_KEY=replace_with_a_long_random_secret
 ALGORITHM=HS256
-DATABASE_URL=postgresql://user:password@host:5432/dbname
-DEV_DB_URL=postgresql://user:password@host:5432/dbname
+DATABASE_URL=postgresql://<user>:<password>@<host>:5432/<database>
+DEV_DB_URL=postgresql://<user>:<password>@localhost:5432/folio_desk
 REDIS_URL=redis://localhost:6379/1
 DEV_REDIS_URL=redis://localhost:6379/1
+DEV_ORIGINS=http://localhost:3000
+ORIGINS=https://your-frontend.example
 ```
 
 Notes:
-- `ENVIRONMENT` switches between development and production settings.
-- `DATABASE_URL` is used in production; `DEV_DB_URL` can be used during development.
-- Redis is used for the rate-limiting layer.
+- In development, `DEV_DB_URL` and `DEV_REDIS_URL` are selected. In production, configure `DATABASE_URL`, `REDIS_URL`, and `ORIGINS` instead.
+- Database URLs may use `postgresql://` or `postgres://`; the application adapts them to the async PostgreSQL driver. The configured database must exist and be reachable.
+- Configure explicit allowed origins in production. Development CORS defaults are permissive if `DEV_ORIGINS` is omitted.
+- `SECRET_KEY` must be a strong private value. Other settings, including token expiration and email-provider settings, are defined in `app/core/config.py`.
+- The app checks database connectivity at startup and creates missing tables from SQLAlchemy metadata. This is convenient for development; use a deliberate migration process for production schema changes.
+- Redis is initialized for the limiter integration at startup. The custom route limiter currently keeps its counters in process memory, so limits are not shared across multiple workers or instances.
 
 ## Running the app
 
@@ -146,6 +144,8 @@ The API is built around a few deliberate design rules:
 - access control issues are handled with clear 401/403/404 responses
 - rate limiting is enforced on authentication and sensitive endpoints
 
+The standalone [`folio-desk-API-Spec.yaml`](./folio-desk-API-Spec.yaml) describes the intended API contract. It currently covers more endpoints than are wired into `app/main.py`; the running application currently includes Auth, Client, and Invites routers. Confirm an endpoint is implemented before relying on its contract.
+
 ## Current project status
 
 This repository is in an active backend development phase. The codebase includes the FastAPI foundation, auth scaffolding, configuration, and the project structure needed for the FolioDesk domain model, but the platform is still evolving toward the complete feature set described in the product docs.
@@ -155,6 +155,7 @@ This repository is in an active backend development phase. The codebase includes
 The project includes several planning and specification documents:
 
 - `one-pager.md` — summary of the product concept and goals
+- `one-pager-wk3.md` — Week 3 testing, documentation, security, and delivery status, including known gaps
 - `folio-desk-API-Spec.yaml` — API contract and endpoint design
 - `ERD.dbml` — entity relationship model
 - `FolioDesk Product Requirements Document.docx` — formal product requirements
@@ -171,11 +172,28 @@ Because this is a service-first project, the most important patterns to preserve
 
 ## Testing
 
-The application is set up to support test coverage for auth, security, and client isolation. The repo currently contains the initial test scaffold and should be expanded as features are implemented.
+The test runner is **pytest**. Test cases use Python's built-in `unittest` and `unittest.mock`, with FastAPI's `TestClient` for route tests. The suite currently covers selected auth and client service logic and routes.
+
+Install dependencies (including pytest) with `uv sync`, then run all tests from the repository root with one command:
 
 ```bash
-pytest
+uv run pytest
 ```
+
+You can run one test module or select a test by name:
+
+```bash
+uv run pytest tests/test_auth.py
+uv run pytest tests/test_client.py -k pagination
+```
+
+The current suite has **20 passing tests**. Tests use mocked services and async database sessions; they do not yet exercise a separate or in-memory database, full client-to-client isolation, or all documented endpoints and failure cases. Coverage instrumentation is not configured, so no coverage percentage is claimed. Expand the suite as routes are implemented, especially with database-backed integration tests for ownership boundaries and 400/401/403/404 behavior.
+
+The Week 3 status and detailed tested/not-tested list are in [`one-pager-wk3.md`](./one-pager-wk3.md).
+
+## Deployment status
+
+This repository currently provides a local setup and run guide, but no verified hosted deployment or checked-in Docker configuration. See the Week 3 status page for outstanding delivery work.
 
 ## License
 

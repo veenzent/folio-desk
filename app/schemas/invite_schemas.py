@@ -4,7 +4,7 @@ from pydantic import BaseModel
 
 
 class CreateInvite(BaseModel):
-    client_id: UUID
+    client_id: str
 
 
 class AddInviteData(BaseModel):
@@ -18,8 +18,8 @@ class AddInviteData(BaseModel):
 
 
 class InviteResponse(BaseModel):
-    id: UUID
-    client_id: UUID
+    id: str
+    client_id: str
     invite_code: str
     created_at: datetime
     expires_at: datetime
